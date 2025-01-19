@@ -1,12 +1,32 @@
 #pragma once
 #include <random>
 #include <vector>
+#include <limits>
 
 #include "../Models/Move.h"
 #include "Board.h"
 #include "Config.h"
 
-const int INF = 1e9;
+const double INF = std::numeric_limits<double>::infinity();
+
+// Оценка состояния доски
+double evaluate_board(const vector<vector<POS_T>>& mtx, const bool color) {
+    double score = 0.0;
+    for (const auto& row : mtx) {
+        for (const auto& piece : row) {
+            if (piece == 1) { 
+                score += 1; 
+            } else if (piece == 2) { 
+                score -= 1; 
+            } else if (piece == 3) { 
+                score += 3;
+            } else if (piece == 4) {
+                score -= 3;
+            }
+        }
+    }
+    return score;
+}
 
 class Logic
 {
@@ -21,19 +41,26 @@ class Logic
 
     vector<move_pos> find_best_turns(const bool color)
     {
-        next_best_state.clear();
-        next_move.clear();
+        vector<move_pos> best_moves;
+        double best_score = -INF;
 
-        find_first_best_turn(board->get_board(), color, -1, -1, 0);
-
-        int cur_state = 0;
-        vector<move_pos> res;
-        do
+        for (const auto& turn : turns)
         {
-            res.push_back(next_move[cur_state]);
-            cur_state = next_best_state[cur_state];
-        } while (cur_state != -1 && next_move[cur_state].x != -1);
-        return res;
+            auto new_board = make_turn(board->get_board(), turn);
+            double score = evaluate_board(new_board, color);
+            
+            if (score > best_score)
+            {
+                best_score = score;
+                best_moves.clear();
+                best_moves.push_back(turn);
+            }
+            else if (score == best_score)
+            {
+                best_moves.push_back(turn);
+            }
+        }
+        return best_moves;
     }
 
 private:
@@ -84,95 +111,52 @@ private:
         return (b + bq * q_coef) / (w + wq * q_coef);
     }
 
-    double find_first_best_turn(vector<vector<POS_T>> mtx, const bool color, const POS_T x, const POS_T y, size_t state,
-                                double alpha = -1)
+    double find_first_best_turn(vector<vector<POS_T>> mtx, const bool color, const POS_T x, const POS_T y, size_t state)
     {
-        next_best_state.push_back(-1);
-        next_move.emplace_back(-1, -1, -1, -1);
-        double best_score = -1;
-        if (state != 0)
-            find_turns(x, y, mtx);
-        auto turns_now = turns;
-        bool have_beats_now = have_beats;
+        double best_score = -INF;
 
-        if (!have_beats_now && state != 0)
+        find_turns(x, y, mtx);
+        for (const auto& turn : turns)
         {
-            return find_best_turns_rec(mtx, 1 - color, 0, alpha);
-        }
-
-        vector<move_pos> best_moves;
-        vector<int> best_states;
-
-        for (auto turn : turns_now)
-        {
-            size_t next_state = next_move.size();
-            double score;
-            if (have_beats_now)
-            {
-                score = find_first_best_turn(make_turn(mtx, turn), color, turn.x2, turn.y2, next_state, best_score);
-            }
-            else
-            {
-                score = find_best_turns_rec(make_turn(mtx, turn), 1 - color, 0, best_score);
-            }
+            auto new_mtx = make_turn(mtx, turn);
+            double score = find_best_turns_rec(new_mtx, 1 - color, 0);
+            
             if (score > best_score)
             {
                 best_score = score;
-                next_best_state[state] = (have_beats_now ? int(next_state) : -1);
-                next_move[state] = turn;
             }
         }
         return best_score;
     }
 
-    double find_best_turns_rec(vector<vector<POS_T>> mtx, const bool color, const size_t depth, double alpha = -1,
-                               double beta = INF + 1, const POS_T x = -1, const POS_T y = -1)
+    double find_best_turns_rec(vector<vector<POS_T>> mtx, const bool color, const size_t depth)
     {
         if (depth == Max_depth)
         {
-            return calc_score(mtx, (depth % 2 == color));
-        }
-        if (x != -1)
-        {
-            find_turns(x, y, mtx);
-        }
-        else
-            find_turns(color, mtx);
-        auto turns_now = turns;
-        bool have_beats_now = have_beats;
-
-        if (!have_beats_now && x != -1)
-        {
-            return find_best_turns_rec(mtx, 1 - color, depth + 1, alpha, beta);
+            return evaluate_board(mtx, color);
         }
 
+        find_turns(color, mtx);
         if (turns.empty())
-            return (depth % 2 ? 0 : INF);
+            return (depth % 2 == 0) ? -INF : INF;
 
-        double min_score = INF + 1;
-        double max_score = -1;
-        for (auto turn : turns_now)
+        double best_score = (depth % 2 == 0) ? -INF : INF;
+
+        for (const auto& turn : turns)
         {
-            double score = 0.0;
-            if (!have_beats_now && x == -1)
+            auto new_mtx = make_turn(mtx, turn);
+            double score = find_best_turns_rec(new_mtx, 1 - color, depth + 1);
+            
+            if (depth % 2 == 0)
             {
-                score = find_best_turns_rec(make_turn(mtx, turn), 1 - color, depth + 1, alpha, beta);
+                best_score = max(best_score, score);
             }
             else
             {
-                score = find_best_turns_rec(make_turn(mtx, turn), color, depth, alpha, beta, turn.x2, turn.y2);
+                best_score = min(best_score, score);
             }
-            min_score = min(min_score, score);
-            max_score = max(max_score, score);
-            // alpha-beta pruning
-            if (depth % 2)
-                alpha = max(alpha, max_score);
-            else
-                beta = min(beta, min_score);
-            if (optimization != "O0" && alpha >= beta)
-                return (depth % 2 ? max_score + 1 : min_score - 1);
         }
-        return (depth % 2 ? max_score : min_score);
+        return best_score;
     }
 
 public:
@@ -319,3 +303,5 @@ private:
     Board *board;
     Config *config;
 };
+
+
